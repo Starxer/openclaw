@@ -2,6 +2,7 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
+import type { HookContext } from "./pi-tools.before-tool-call.js";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -43,8 +44,8 @@ function enableAfterToolCallHook() {
   hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
 }
 
-async function executeReadTool(callId: string) {
-  const defs = toToolDefinitions([createReadTool()]);
+async function executeReadTool(callId: string, hookContext?: HookContext) {
+  const defs = toToolDefinitions([createReadTool()], hookContext);
   const def = defs[0];
   if (!def) {
     throw new Error("missing tool definition");
@@ -53,14 +54,19 @@ async function executeReadTool(callId: string) {
   return await execute(callId, { path: "/tmp/file" }, undefined, undefined, extensionContext);
 }
 
-function expectReadAfterToolCallPayload(result: Awaited<ReturnType<typeof executeReadTool>>) {
+function expectReadAfterToolCallPayload(
+  result: Awaited<ReturnType<typeof executeReadTool>>,
+  context: { toolName: string; agentId?: string; sessionKey?: string } = {
+    toolName: "read",
+  },
+) {
   expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledWith(
     {
       toolName: "read",
       params: { mode: "safe" },
       result,
     },
-    { toolName: "read" },
+    context,
   );
 }
 
@@ -104,6 +110,24 @@ describe("pi tool definition adapter after_tool_call", () => {
     expectReadAfterToolCallPayload(result);
   });
 
+  it("forwards hook context to after_tool_call payload", async () => {
+    enableAfterToolCallHook();
+    hookMocks.runBeforeToolCallHook.mockResolvedValue({
+      blocked: false,
+      params: { mode: "safe" },
+    });
+    const hookContext: HookContext = { agentId: "main", sessionKey: "session-ctx" };
+    const result = await executeReadTool("call-ok-context", hookContext);
+
+    expect(result.details).toMatchObject({ ok: true });
+    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
+    expectReadAfterToolCallPayload(result, {
+      toolName: "read",
+      agentId: "main",
+      sessionKey: "session-ctx",
+    });
+  });
+
   it("dispatches after_tool_call once on adapter error with normalized tool name", async () => {
     enableAfterToolCallHook();
     const tool = {
@@ -115,8 +139,9 @@ describe("pi tool definition adapter after_tool_call", () => {
         throw new Error("boom");
       }),
     } satisfies AgentTool;
+    const hookContext: HookContext = { agentId: "main", sessionKey: "session-err" };
 
-    const defs = toToolDefinitions([tool]);
+    const defs = toToolDefinitions([tool], hookContext);
     const def = defs[0];
     if (!def) {
       throw new Error("missing tool definition");
@@ -136,7 +161,7 @@ describe("pi tool definition adapter after_tool_call", () => {
         params: { cmd: "ls" },
         error: "boom",
       },
-      { toolName: "exec" },
+      { toolName: "exec", agentId: "main", sessionKey: "session-err" },
     );
   });
 
