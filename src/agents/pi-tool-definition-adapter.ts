@@ -38,6 +38,21 @@ type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => u
   : ToolExecuteArgsCurrent;
 type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
 
+function buildToolHookContext(
+  toolName: string,
+  hookContext?: HookContext,
+): {
+  toolName: string;
+  agentId?: string;
+  sessionKey?: string;
+} {
+  return {
+    toolName,
+    ...(hookContext?.agentId !== undefined ? { agentId: hookContext.agentId } : {}),
+    ...(hookContext?.sessionKey !== undefined ? { sessionKey: hookContext.sessionKey } : {}),
+  };
+}
+
 function isAbortSignal(value: unknown): value is AbortSignal {
   return typeof value === "object" && value !== null && "aborted" in value;
 }
@@ -136,7 +151,10 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
-export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
+export function toToolDefinitions(
+  tools: AnyAgentTool[],
+  hookContext?: HookContext,
+): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
@@ -155,6 +173,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
               toolName: name,
               params,
               toolCallId,
+              ctx: hookContext,
             });
             if (hookOutcome.blocked) {
               throw new Error(hookOutcome.reason);
@@ -180,7 +199,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
                   params: isPlainObject(afterParams) ? afterParams : {},
                   result,
                 },
-                { toolName: name },
+                buildToolHookContext(name, hookContext),
               );
             } catch (hookErr) {
               logDebug(
@@ -226,7 +245,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
                   params: isPlainObject(params) ? params : {},
                   error: described.message,
                 },
-                { toolName: normalizedName },
+                buildToolHookContext(normalizedName, hookContext),
               );
             } catch (hookErr) {
               logDebug(
